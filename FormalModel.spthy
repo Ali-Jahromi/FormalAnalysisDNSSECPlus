@@ -5,16 +5,16 @@ begin
 builtins: diffie-hellman, symmetric-encryption, signing, hashing
 functions: kdf/1
 
-// Equality restriction used in signature verification
+// The Equality restriction used in signature verification
 restriction Equality:
   "All x y #i. Eq(x, y)@i ==> x = y"
 
-// OnlyOnce restriction used for limit multiple occurance of some rules (e.g., Key server initialization)
+// The OnlyOnce restriction is used to limit the multiple occurrences of certain rules
 restriction OnlyOnce:
   "All x #i #j. OnlyOnce(x)@#i & OnlyOnce(x)@#j ==> #i = #j"
 
 /*********************************************************************
-*Modeling the key server singing the short-term key of the NS
+*Modeling the delegation process (A key server singing the short-term key of the ANSes)
 *********************************************************************/
 // Initializing the zone Key server as singleton and also adding the initial agreement key and signing key of the zone as parts of the Key server
 // ltkKS: Is the zone's long-term signing key
