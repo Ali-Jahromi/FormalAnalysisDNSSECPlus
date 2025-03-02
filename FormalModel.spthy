@@ -28,11 +28,11 @@ rule Key_Server_Init:
 	,  KeyServerInit( $K, ~ltkKS, pk(~ltkKS) )
 	]->
 	[ 
-	  !ZKS_Sk($K, ~ltkKS)
-	, !ZKS_Pk($K, pk(~ltkKS)) //Sent through a secure channel to the NSes and as trust anchor to the resolvers
-	, !ZKA_Sk($K, ~ltkKA)
-	, !ZKA_Pk($K, 'g' ^ ~ltkKA)
-	, Out(<pk(~ltkKS), 'g' ^ ~ltkKA >) //Sending out public keys (Add them to the adversaries knowledge)
+	  !ZKS_Sk($K, ~ltkKS) // Used by the key server to sign the short-term signing keys of nameservers
+	, !ZKS_Pk($K, pk(~ltkKS)) // Sent through a secure channel to the NSes and as trust anchor to the resolvers
+	, !ZKA_Sk($K, ~ltkKA) // Used for query decryption by nameservers
+	, !ZKA_Pk($K, 'g' ^ ~ltkKA) // Used for query encryption by resolvers
+	, Out(<pk(~ltkKS), 'g' ^ ~ltkKA >) // Sending out public keys (Add them to the adversaries knowledge)
 	]
 
 // Rule to model zone's long-term key signing private key compromise
@@ -48,44 +48,44 @@ rule Compromise_Zone_ltkKA:
 // In the paper mutual authentication and confidentiality of this channel is assumed
 rule NS_Sign_Request:
 	[ 
-	  Fr(~stsk)
-	, Fr(~nid)
+	  Fr(~stsk) // Short-term signing key of the nameserver
+	, Fr(~nid) // Nameserver ID
 	]
 	--[
-	    OnlyOnce('NS_Sign_Request')
-	  , NS_Sign_Req($N, ~nid, ~stsk)
+	    // OnlyOnce('NS_Sign_Request') // Used for test
+	    NS_Sign_Req($N, ~nid, ~stsk) // Used in executability lemmas
 	]->
 	[ 
 	  NS_Waiting_Signature( $N, ~nid, ~stsk, pk(~stsk) )
-	, NS_Sends_to_Sign( '1', $N, ~nid, pk(~stsk) )
+	, NS_Sends_to_Sign( '1', $N, ~nid, pk(~stsk) ) // Send the signing request via a secure out-of-band channel to the key server, ensuring it remains inaccessible to the adversary
 	]
 	
 // Key server signs the NS's short-term key
 rule Key_Server_Signs_NS:
 	[
-	  !ZKS_Sk($K, ltkKS)
-	, NS_Sends_to_Sign( '1', $N, nid, stpk )
+	  !ZKS_Sk($K, ltkKS) // Using the long-term signing key to sign the short-term signing key of the nameservers
+	, NS_Sends_to_Sign( '1', $N, nid, stpk ) // Receiving the short-term signing key of the nameserver from the secure out-of-band channel
 	]
 	--[ 
-	  OnlyOnce('Key_Server_Signs_NS')
-	, KS_Signs($N, nid, stpk, sign(<$N, nid, stpk>, ltkKS))
+	  // OnlyOnce('Key_Server_Signs_NS') // Used for test
+	  KS_Signs($N, nid, stpk, sign(<$N, nid, stpk>, ltkKS)) // Used in executability lemmas
 	]->
 	[
-	  Signed_NS_key('2', sign(<$N, nid, stpk>, ltkKS))
+	  Signed_NS_key('2', sign(<$N, nid, stpk>, ltkKS)) // Send the signed key of the nameserver via a secure out-of-band channel to the nameserver, ensuring it remains inaccessible to the adversary
 	]
 
 // NS receives the signed short-term signing key and verifies the signature
-//This Rule seems to be redundant ---> Remove it after code works and combine it with Key_Server_Signs_NS
+// This Rule seems to be redundant ---> Remove it after code works and combine it with Key_Server_Signs_NS
 rule NS_Receives_Signed:
 	[
-	  NS_Waiting_Signature( $N, nid, stsk, stpk )
-	, Signed_NS_key('2', sig_stpk ) 
-	, !ZKS_Pk($K, pkKS)
+	  NS_Waiting_Signature( $N, nid, stsk, stpk ) // Nameserver waiting for delegation
+	, Signed_NS_key('2', sig_stpk )  // Receiving the signed key via the secure out-of-band channel from the key server
+	, !ZKS_Pk($K, pkKS) // Public sigining key of the zone used for verification of the received signature
 	]
 	--[
-	  Eq(verify(sig_stpk, <$N, nid, stpk> , pkKS), true)
-	, NS_Recev_Signed(sig_stpk, <$N, nid, stpk>)
-	, OnlyOnce('NS_Receives_Signed')
+	  Eq(verify(sig_stpk, <$N, nid, stpk> , pkKS), true) // Verifying the signature
+	, NS_Recev_Signed(sig_stpk, <$N, nid, stpk>) // Used in executability lemmas
+	//, OnlyOnce('NS_Receives_Signed') // Used in test
 	]->
 	[ 
 	  //!NS_sstk_Signed_PK(sig_stpk, $N, nid, stpk)
@@ -105,26 +105,26 @@ rule Res_1:
 	let
 	  queryKey = kdf(< ~Rnc, ZKAP ^ ~ephR >)
 	  query_data = < ~query, 'query'>
-	  encrypted_query = <~Rnc, 'g' ^ ~ephR, senc(query_data, queryKey)>
+	  encrypted_query = <~Rnc, 'g' ^ ~ephR, senc(query_data, queryKey)> // Encrypted query data with resolver's nonce and public ephemeral agreement key
 	in
 	[ 
-	  Fr(~ephR)
-	, Fr(~query) //Resolver generates a fresh query with a fresh qid
-	, Fr(~Rnc)
-	, !ZKA_Pk($K, ZKAP) //Zone Key Agreement Public ('g' ^ ltkKA)
+	  Fr(~ephR) // Ephemeral private agreement key of the resolver
+	, Fr(~query) // Fresh query (not known to the adversary)
+	, Fr(~Rnc) // Resolver's nonce
+	, !ZKA_Pk($K, ZKAP) // Zone Key Agreement Public ('g' ^ ltkKA)
 	]
 	--[ 
-	  ResolverSentQuery($R, ~query, ~ephR)
-	, Role('R')
-	, QKeySecret($R, ~ephR, queryKey)
-	, QDataSecret($R, query_data)
-	, OUT_R_1( encrypted_query )
+	  ResolverSentQuery($R, ~query, ~ephR) // Used in executability lemmas
+	, Role('R') // Resolver's role
+	, QKeySecret($R, ~ephR, queryKey) // Used in query key secrecy lemma
+	, QDataSecret($R, query_data) // Used in query data secerecy lemma
+	, OUT_R_1( encrypted_query ) // Used in source lemmas to avoid partial deconstructions
 	]->
 	[ 
-	  Out( encrypted_query )
-	, Res_State_1( $R, ~ephR, ~query, ~Rnc)
-	, !EskR($R, ~ephR)
-	, !EpkR($R, 'g' ^ ~ephR)
+	  Out( encrypted_query ) // Send out the encrypted query to the network
+	, Res_State_1( $R, ~ephR, ~query, ~Rnc) // Keep order and state of the sent query 
+	, !EskR($R, ~ephR) // Storing ephemeral private agreement key of the resolver
+	, !EpkR($R, 'g' ^ ~ephR) // Storing ephemeral public agreement key of the resolevr (Not needed - can remove later)
 	]
 
 // NS signs the ehpkey of itself and sends the message encrypted with the session key
@@ -139,29 +139,29 @@ rule NS_1:
 	  encrypted_response = < ~Nnc, 'g' ^ ~ephN, senc( response_data, ResponseMaster ) >
 	in
 	[ 
-	  !ZKA_Sk($K, ZKA) //Zone Key Agreement Private (ltkKA)
-	, In( encrypted_query )
-	, !NS_sstk_Signed_SK(stk_sig, $N, nid, stpk, stsk)
-	, Fr(~ephN)
-	, Fr(~Nnc)
-	, Fr(~response)
+	  !ZKA_Sk($K, ZKA) // Zone Key Agreement Private (ltkKA)
+	, In( encrypted_query ) // Receiving encrypted query from the network
+	, !NS_sstk_Signed_SK(stk_sig, $N, nid, stpk, stsk) // The signed short-term signing key of the nameserver
+	, Fr(~ephN) // Ephemeral private agreement key of the nameserver
+	, Fr(~Nnc) // Nameserver's nonce 
+	, Fr(~response) // Fresh response (not known to the adversary)
 	]
 	--[
-	    Role('N')
-	  , NS_Sends_Response($R, $N, query, ~response, nid, stsk, stk_sig)	
+	    Role('N') // Nameserver's role
+	  , NS_Sends_Response($R, $N, query, ~response, nid, stsk, stk_sig) // Used in executability lemmas
 	  //, RDataSecret(response_data)
-	  , RKeySecret(ResponseMaster)
+	  //, RKeySecret(ResponseMaster) // Not needed as we define the secrecy of responses received by resolvers not sent by nameservers
 	  //Authentication-related action facts
-	  , Running($N, $R, 'Nameserver', < query, ResponseMaster >)
-	  , IN_N_1(query, <Rnc, epkR, senc(query_data, queryKey)>)
-	  , OUT_N_2(encrypted_response)
-	  , OnlyOnce('NS_1')
+	  , Running($N, $R, 'Nameserver', < query, ResponseMaster >) // Used in entity authentication lemma
+	  , IN_N_1(query, <Rnc, epkR, senc(query_data, queryKey)>) // Used in source lemmas
+	  , OUT_N_2(encrypted_response) // Source lemmas
+	  //, OnlyOnce('NS_1') // test case
 	]->
 	[
-	  !EskN($N, ~ephN)
-	, !EpkN($N, 'g' ^ ~ephN)
-	, Out( encrypted_response )
-	, Response_Key($N, ResponseMaster)
+	  !EskN($N, ~ephN) // Ephemeral private agreement key of the nameserver (Not necessary)
+	, !EpkN($N, 'g' ^ ~ephN) // Ephemera public agreement of the nameserver (Not necessary)
+	, Out( encrypted_response ) // Sending out the encrypted response to the network
+	, Response_Key($N, ResponseMaster) // Response key used by the nameserver
 	]
 
 //rule Response_Key_Compromise:
@@ -174,20 +174,20 @@ rule Res_2:
 	encrypted_response = < Nnc, epkN, senc(response_data, ResponseKey)>
 	in
 	[ 
-	  In( encrypted_response)
-	, Res_State_1( $R, ephR, query, Rnc)
-	, !ZKS_Pk($K, ltkPK)
+	  In( encrypted_response) // Receiving the encrypted response from the nameserver 
+	, Res_State_1( $R, ephR, query, Rnc) // State information from the resolver sending the query (ordering)
+	, !ZKS_Pk($K, ltkPK) // Zone's long-term public signing key
 	]
 	--[
-	  Eq(verify(sig_epkN, epkN, stpk), true)
-	, Eq(verify(stk_sig, <$N, nid, stpk>, ltkPK), true)
-	, Role('R')
-	, RDataSecret(<'response', response, query, $N, nid, stpk, sig_epkN>)
+	  Eq(verify(sig_epkN, epkN, stpk), true) // Verify the signature of the nameserver's ephemeral agreement public key
+	, Eq(verify(stk_sig, <$N, nid, stpk>, ltkPK), true) // Verify the signature of the nameserver's short-term signin key
+	, Role('R') // Resolver role
+	, RDataSecret(<'response', response, query, $N, nid, stpk, sig_epkN>) // Used for response data secrecy lemma
 	//, RDataSecret(stk_sig)
-	, ResolverReceivesResponse( response, query)
-	, RKeySecret(ResponseKey)
+	, ResolverReceivesResponse( response, query) // Used in executability lemmas
+	, RKeySecret(ResponseKey) // Used for response key secrecy lemma
 	// Authentication-related action facts
-	, Commit($R, $N, response, < query, ResponseKey >) //injective-Agreement (Unilateral)
+	, Commit($R, $N, response, < query, ResponseKey >) // Used for unilateral authentication lemma 
 	//, IN_R_2(response, <Nnc, epkN, senc(response_data, ResponseKey)>)
 	]->
 	[]
@@ -200,7 +200,7 @@ rule EskR_Compromise:
 rule EskN_Compromise:
     [ !EskN($N, ~ephN) ] --[ EphNCompromised($N) ]-> [ Out(~ephN) ]
 
-
+// Source lemma to avoid partial deconstructions 
 lemma typesQ [sources]:
         "
         All query Rnc epkR mR #i .
@@ -210,6 +210,7 @@ lemma typesQ [sources]:
         | (Ex #j. OUT_R_1(<Rnc, epkR, mR>) @j)
         "
 
+// Executability to check the resolver ephemeral key compromise
 lemma compromise:
 	exists-trace
 	"
@@ -217,6 +218,7 @@ lemma compromise:
 		EphRCompromised(ephR) @i
 	"
 
+//  Executability lemma to check the completion of delegation process
 lemma key_sign_executable:
 	exists-trace
 	"
@@ -225,6 +227,7 @@ lemma key_sign_executable:
 	NS_Recev_Signed(sig_stpk, <N, nid, stpk>) @i1
 	"
 
+// Executability lemma to check the completion of the name resolution process 
 lemma resolution_executable:
 	exists-trace
 	"
@@ -257,6 +260,7 @@ lemma query_sessionkey_secrecy:
 	  (Ex #l . EphRCompromised(ephR) @l)
 	"
 
+// The correct query session key secrecy lemma
 lemma query_sessionkey_secrecy2:
 	"
 	All R ephR Qkey #i .
@@ -265,7 +269,7 @@ lemma query_sessionkey_secrecy2:
 	  // And none of the agreement or signing keys has been compromised
 	  not (Ex R #t1. EphRCompromised(R) @t1) &	
 	  not (Ex N #t2 . EphNCompromised(N) @t2) &
-	  //not (Ex N #t3 . StskCompromised(N) @t3) &
+	  not (Ex N #t3 . StskCompromised(N) @t3) &
 	  not (Ex Z #t4 . SLtkCompromised(Z) @t4) &
 	  not (Ex Z #t5 . ALtkCompromised(Z) @t5)
 	  ==> not Ex #j. K(Qkey) @j
@@ -296,6 +300,7 @@ lemma response_sessionkey_secrecy:
 	  //(Ex Z #l2 . ALtkCompromised(Z) @l2))
 	"
 
+// The correct response session key secrecy lemma 
 lemma response_sessionkey_secrecy2:
 	"
 	All Rkey #i .
@@ -303,7 +308,7 @@ lemma response_sessionkey_secrecy2:
 	  RKeySecret(Rkey) @i & Role('R') @i &
 	  not (Ex R #t1. EphRCompromised(R) @t1) &	
 	  not (Ex N #t2 . EphNCompromised(N) @t2) &
-	  //not (Ex N #t3 . StskCompromised(N) @t3) &
+	  not (Ex N #t3 . StskCompromised(N) @t3) &
 	  not (Ex Z #t4 . SLtkCompromised(Z) @t4) &
 	  not (Ex Z #t5 . ALtkCompromised(Z) @t5)
 	  ==>
@@ -315,8 +320,8 @@ lemma response_sessionkey_secrecy2:
 * Query session key partial forward secrecy (Only on the client side key is ephemeral)
 * Query session keys of previous keys remain secret
 * INCOMPLETE: Need to define it in a that if the ephemeral key of the resolver is compromised, it does not affect previous sessions.
-* ALSO: I think it also provides post compromise forward secrecy. i.e., If ephR is compromised it does not affect the subsequent queries sent with new ephRs as well. 
 *****************************************************************************************/
+// NOT A STATED QUERY! (IGNORE)
 lemma query_sessionkey_Distinct:
 	"
 	All R Qkey1 Qkey2 ephR1 ephR2 #i1 #i2.
@@ -335,6 +340,7 @@ lemma query_sessionkey_Distinct:
 	  //)
 	"
 
+// NOT A STATED QUERY! (IGNORE)
 lemma query_sessionkey_Distinct2:
 	"
 	All R Qkey1 Qkey2 ephR1 ephR2 #i1 #i2.
@@ -415,12 +421,14 @@ lemma response_sesskey_FwdSecrecy:
 	// AND the long-term agreement key of the zone has been compromised (if not the adversary does not have access to the QID?)
 	"
 
+// The correct response session key forward secrecy lemma
 lemma response_sesskey_FwdSecrecy2:
 	"
 	All Rkey #i .
 	// If a resolver receives a response and generates a session key
 	RKeySecret(Rkey) @i & Role('R') @i &
-	//not (Ex Z #t1 . SLtkCompromised(Z) @t1 & t1 < i) &
+	// The long-term signing key of the zone has not been compromised before the response is received
+	not (Ex Z #t1 . SLtkCompromised(Z) @t1 & t1 < i) &
 	// The short-term signing key of the Nameserver has been comromised
 	not (Ex N #t2 . StskCompromised(N) @t2 & t2 < i) &
 	//The ephemeral private agreement key of the Nameserver has been compromised
@@ -428,7 +436,7 @@ lemma response_sesskey_FwdSecrecy2:
 	// OR the ephemeral private agreement key resolver has been compromised
 	not (Ex ephR #t4 . EphRCompromised(ephR) @t4)
 	// We are assuming that no protocol key has been compromised
-	//not (Ex Z #t5 . ALtkCompromised(Z) @t5)
+	not (Ex Z #t5 . ALtkCompromised(Z) @t5)
 	// AND the adversary knows the session key
 	==>
 	not (Ex #j . K(Rkey) @j)
@@ -438,7 +446,7 @@ lemma response_sesskey_FwdSecrecy2:
 /*****************************************************************************************
 * non-injective Agreement 
 ******************************************************************************************/
-// Proved
+// Proved 
 lemma entity_authentication_Uni_NiAgreement:
 	"All RES NS data #i. 
 	  Commit(RES, NS, 'Resolver', data)@i &
@@ -474,11 +482,14 @@ lemma entity_authentication_mut_NiAgreement_allkeys_safe:
 	  not (Ex Z #l1 . SLtkCompromised(Z) @l1)
     ==> (Ex #j . Running(NS, RES, 'Nameserver', data)@j & #j < #i)"
 
+
+
+// The correct unilateral entity authentication of the nameserver
 lemma entity_authentication_Uni_Agreement:
 	"All RES NS data #i.
 	  Commit(RES, NS, 'Resolver', data) @i &
 	  not (Ex R #t1. EphRCompromised(R) @t1) &	
-	  //not (Ex N #t2 . EphNCompromised(N) @t2) &
+	  not (Ex N #t2 . EphNCompromised(N) @t2) &
 	  not (Ex N #t3 . StskCompromised(N) @t3) & 
 	  not (Ex Z #t4 . SLtkCompromised(Z) @t4) &
 	  not (Ex Z #t5 . ALtkCompromised(Z) @t5)
@@ -488,12 +499,13 @@ lemma entity_authentication_Uni_Agreement:
           & not (Ex RES3 NS2 #i2. Commit(RES3, NS2, 'Resolver', data) @i2
           & not (#i2 = #i)))"
 
+// Query data secrecy lemma
 lemma query_secrecy_N:
 	"
 	All R Qdata #i .
 	(QDataSecret(R, Qdata) @i & Role('R') @i) &
 	not (Ex R #t1. EphRCompromised(R) @t1) &	
-	//not (Ex N #t2 . EphNCompromised(N) @t2) &
+	not (Ex N #t2 . EphNCompromised(N) @t2) &
 	not (Ex N #t3 . StskCompromised(N) @t3) &
 	not (Ex Z #t4 . SLtkCompromised(Z) @t4) &
 	not (Ex Z #t5 . ALtkCompromised(Z) @t5)
@@ -501,12 +513,13 @@ lemma query_secrecy_N:
 	(not Ex #j . K(Qdata) @j)
 	"
 
+// Response data secrecy lemma
 lemma response_secrecy_N:
 	"
 	All Rdata #i . 
 	RDataSecret(Rdata) @i & Role('R') @i &
 	not (Ex R #t1. EphRCompromised(R) @t1) &	
-	//not (Ex N #t2 . EphNCompromised(N) @t2) &
+	not (Ex N #t2 . EphNCompromised(N) @t2) &
 	not (Ex N #t3 . StskCompromised(N) @t3) &
 	not (Ex Z #t4 . SLtkCompromised(Z) @t4) &
 	not (Ex Z #t5 . ALtkCompromised(Z) @t5)
